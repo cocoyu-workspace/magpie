@@ -53,6 +53,8 @@ type gContent struct {
 type gRequest struct {
 	Model             string          `json:"model"`
 	Stream            bool            `json:"stream"`
+	Speed             string          `json:"speed,omitempty"`
+	ServiceTier       string          `json:"serviceTier,omitempty"`
 	Contents          []gContent      `json:"contents"`
 	SystemInstruction json.RawMessage `json:"systemInstruction,omitempty"`
 	Tools             []struct {
@@ -218,7 +220,17 @@ func parseGemini(body []byte) (*Request, error) {
 	if err := json.Unmarshal(body, &g); err != nil {
 		return nil, fmt.Errorf("invalid request: %v", err)
 	}
-	r := &Request{Model: g.Model, Stream: g.Stream}
+	tier := g.ServiceTier
+	if tier == "" {
+		tier = g.Speed
+	}
+	r := &Request{
+		Model:     g.Model,
+		Stream:    g.Stream,
+		Fast:      tier == "fast" || tier == "priority" || tier == "ultrafast",
+		Ultrafast: tier == "ultrafast",
+		Tier:      g.ServiceTier,
+	}
 	r.System = geminiText(g.SystemInstruction)
 	if gc := g.GenerationConfig; gc != nil {
 		r.MaxTokens, r.Temp, r.TopP, r.Stop = gc.MaxOutputTokens, gc.Temperature, gc.TopP, gc.StopSequences

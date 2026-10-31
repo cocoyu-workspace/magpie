@@ -97,3 +97,104 @@ func TestAgentEffortOnCursorLocal(t *testing.T) {
 		t.Fatalf("taken off, an effort was added: %v", body)
 	}
 }
+
+func TestAgyMediumDefaultAndHighMaxEffort(t *testing.T) {
+	s, up := fasted(t)
+	if err := catalog.SaveLive("oa", "https://api.openai.com/v1", []catalog.Model{
+		{ID: "gpt-6.1-sol", Efforts: []string{"low", "medium", "high", "xhigh"}, CodexFast: true},
+		{ID: "gpt-6-astra", Efforts: []string{"low", "medium", "high", "xhigh"}, CodexFast: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Save(provider.Provider{
+		ID:        "word-claude",
+		Name:      "Word Claude",
+		Key:       "kw",
+		Anthropic: "https://word.example",
+		Models:    []string{"word/claude-opus-5-5", "word/claude-sonnet-5-5"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Save(provider.Provider{
+		ID:        "perplexity",
+		Name:      "Perplexity",
+		Key:       "kp",
+		Anthropic: "https://pplx.example",
+		Models:    []string{"perplexity/fable-5.1", "perplexity/opus-5.5", "perplexity/sonnet-5.5"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	geminiBody := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":-1,"includeThoughts":true}}}`
+	effortOf := func(body map[string]any) any {
+		if r, ok := body["reasoning"].(map[string]any); ok {
+			return r["effort"]
+		}
+		if oc, ok := body["output_config"].(map[string]any); ok {
+			return oc["effort"]
+		}
+		return body["reasoning_effort"]
+	}
+
+	// Default agy requests send medium effort across all channels
+	for _, m := range []string{
+		"oa/gpt-6.1-sol",
+		"oa/gpt-6.1-sol-fast",
+		"oa/gpt-6.1-sol-ultrafast",
+		"oa/gpt-6-astra",
+		"word-claude/word/claude-opus-5-5",
+		"word-claude/word/claude-sonnet-5-5",
+		"perplexity/perplexity/fable-5.1",
+		"perplexity/perplexity/opus-5.5",
+		"perplexity/perplexity/sonnet-5.5",
+	} {
+		postFrom(t, s, "agy", "/v1beta/models/"+m+":streamGenerateContent?alt=sse", geminiBody)
+		if _, _, _, body := up.last(t); effortOf(body) != "medium" {
+			t.Fatalf("default %s: got effort %v in %v", m, effortOf(body), body)
+		}
+	}
+
+	// High suffix (-high and :high) sends high across all channels (including -fast-high / -ultrafast-high)
+	for _, m := range []string{
+		"oa/gpt-6.1-sol-high",
+		"oa/gpt-6.1-sol-fast-high",
+		"oa/gpt-6.1-sol-ultrafast-high",
+		"oa/gpt-6-astra-high",
+		"oa/gpt-6-astra-fast-high",
+		"oa/gpt-6-astra-ultrafast-high",
+		"word-claude/word/claude-opus-5-5-high",
+		"word-claude/word/claude-sonnet-5-5-high",
+		"perplexity/perplexity/fable-5.1-high",
+		"perplexity/perplexity/opus-5.5-high",
+		"perplexity/perplexity/sonnet-5.5-high",
+	} {
+		postFrom(t, s, "agy", "/v1beta/models/"+m+":streamGenerateContent?alt=sse", geminiBody)
+		if _, _, _, body := up.last(t); effortOf(body) != "high" {
+			t.Fatalf("high %s: got effort %v in %v", m, effortOf(body), body)
+		}
+	}
+
+	// Max suffix (-max and :max) sends xhigh on Codex and max on Word/Perplexity Claude
+	for _, tc := range []struct {
+		model string
+		want  string
+	}{
+		{"oa/gpt-6.1-sol-max", "xhigh"},
+		{"oa/gpt-6.1-sol-fast-max", "xhigh"},
+		{"oa/gpt-6.1-sol-ultrafast-max", "xhigh"},
+		{"oa/gpt-6-astra-max", "xhigh"},
+		{"oa/gpt-6-astra-fast-max", "xhigh"},
+		{"oa/gpt-6-astra-ultrafast-max", "xhigh"},
+		{"oa/gpt-6.1-sol:max", "xhigh"},
+		{"word-claude/word/claude-opus-5-5-max", "max"},
+		{"word-claude/word/claude-sonnet-5-5-max", "max"},
+		{"perplexity/perplexity/fable-5.1-max", "max"},
+		{"perplexity/perplexity/opus-5.5-max", "max"},
+		{"perplexity/perplexity/sonnet-5.5-max", "max"},
+	} {
+		postFrom(t, s, "agy", "/v1beta/models/"+tc.model+":streamGenerateContent?alt=sse", geminiBody)
+		if _, _, _, body := up.last(t); effortOf(body) != tc.want {
+			t.Fatalf("max %s: got effort %v, want %s in %v", tc.model, effortOf(body), tc.want, body)
+		}
+	}
+}

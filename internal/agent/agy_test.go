@@ -119,6 +119,16 @@ func TestAgy(t *testing.T) {
 	if got := strings.TrimSpace(agyRead(t, path)); got != "{\n  \"trustedWorkspaces\": []\n}" {
 		t.Fatalf("left behind:\n%s", got)
 	}
+	if s := agyStandIn(path); s != "" {
+		t.Fatalf("stand-in while disconnected: %q", s)
+	}
+	a.Apply("model", "magpie/deepseek/pro-fast")
+	if s := agyStandIn(path); s != "deepseek/pro" {
+		t.Fatalf("stand-in: got %q, want deepseek/pro", s)
+	}
+	if s := StandIn("agy", "gemini-3.1-flash-lite-preview"); s != "deepseek/pro" {
+		t.Fatalf("StandIn(agy): got %q, want deepseek/pro", s)
+	}
 }
 
 func agyJSON(v any) string { b, _ := json.Marshal(v); return string(b) }

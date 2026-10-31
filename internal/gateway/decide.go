@@ -648,6 +648,16 @@ func withEffort(proto provider.Protocol, body []byte, effort string) []byte {
 			}
 			return withFields(body, fields)
 		}
+	case provider.Gemini:
+		var g struct {
+			GenerationConfig *struct {
+				ThinkingConfig *gThinking `json:"thinkingConfig"`
+			} `json:"generationConfig"`
+		}
+		if decodeJSON(body, &g) != nil || g.GenerationConfig == nil || g.GenerationConfig.ThinkingConfig == nil || g.GenerationConfig.ThinkingConfig.effort() == "" {
+			return body
+		}
+		return withFixedEffort(proto, body, effort)
 	}
 	return body
 }
@@ -694,9 +704,12 @@ func sentEffort(proto provider.Protocol, body []byte, p provider.Provider, model
 // has — no more than high, which it takes where it turns max away (#214).
 // A model whose levels just aren't known is asked as the agent asked.
 func fitFor(p provider.Provider, model, want string) string {
+	if adaptiveOnly(model) && want == "max" {
+		return "max"
+	}
 	levels := p.Efforts(model)
 	e := fitEffort(want, levels)
-	if len(levels) == 0 && slices.Index(effortRank, e) > slices.Index(effortRank, "high") && p.Levelless(model) {
+	if len(levels) == 0 && slices.Index(effortRank, e) > slices.Index(effortRank, "high") && p.Levelless(model) && !adaptiveOnly(model) {
 		return "high"
 	}
 	return e
@@ -762,6 +775,22 @@ func withFixedEffort(proto provider.Protocol, body []byte, effort string) []byte
 			return body
 		}
 		return withFields(body, map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": budget}})
+	case provider.Gemini:
+		var v struct {
+			GenerationConfig map[string]any `json:"generationConfig"`
+		}
+		if decodeJSON(body, &v) != nil {
+			return body
+		}
+		if v.GenerationConfig == nil {
+			v.GenerationConfig = map[string]any{}
+		}
+		if effort == "none" {
+			v.GenerationConfig["thinkingConfig"] = map[string]any{"thinkingBudget": 0}
+		} else {
+			v.GenerationConfig["thinkingConfig"] = map[string]any{"thinkingLevel": effort, "includeThoughts": true}
+		}
+		return withFields(body, map[string]any{"generationConfig": v.GenerationConfig})
 	}
 	return body
 }

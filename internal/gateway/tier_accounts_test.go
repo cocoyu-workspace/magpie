@@ -212,6 +212,7 @@ func TestCodexFastForOtherAgents(t *testing.T) {
 	asks := []struct{ agent, path, body string }{
 		{"claude", "/v1/messages", `{"model":"codex/gpt-6-luna","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}`},
 		{"opencode", "/v1/chat/completions", `{"model":"codex/gpt-6-luna","messages":[{"role":"user","content":"ping"}]}`},
+		{"agy", "/v1beta/models/codex/gpt-6-luna:generateContent", `{"contents":[{"role":"user","parts":[{"text":"ping"}]}]}`},
 	}
 	last := func() string {
 		got := tried()
@@ -363,9 +364,11 @@ func TestUltraPickSentUltrafast(t *testing.T) {
 
 	chat := `{"model":"codex/gpt-6-luna","messages":[{"role":"user","content":"ping"}]}`
 	messages := `{"model":"codex/gpt-6-luna","max_tokens":64,"messages":[{"role":"user","content":"ping"}]}`
+	geminiBody := `{"contents":[{"role":"user","parts":[{"text":"ping"}]}]}`
 	for _, a := range []struct{ agent, path, body string }{
 		{"opencode", "/v1/chat/completions", chat},
 		{"claude", "/v1/messages", messages},
+		{"agy", "/v1beta/models/codex/gpt-6-luna:generateContent", geminiBody},
 	} {
 		if err := provider.SetFastTier(a.agent, "codex/gpt-6-luna", "ultrafast"); err != nil {
 			t.Fatal(err)
@@ -388,6 +391,21 @@ func TestUltraPickSentUltrafast(t *testing.T) {
 	if got := send("cline", "/v1/chat/completions", `{"model":"codex/gpt-6-luna","service_tier":"ultrafast","messages":[{"role":"user","content":"ping"}]}`); got != "acct-pro:ultrafast" {
 		t.Errorf("chat's own ultrafast: tried %s", got)
 	}
+	// agy's -fast and -ultrafast model suffixes, without switching in the picker
+	if err := provider.SetFastPick("agy", "codex/gpt-6-luna", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := send("agy", "/v1beta/models/codex/gpt-6-luna-fast:generateContent", geminiBody); got != "acct-plus:priority" {
+		t.Errorf("agy -fast suffix: tried %s", got)
+	}
+	if got := send("agy", "/v1beta/models/codex/gpt-6-luna-ultrafast:generateContent", geminiBody); got != "acct-pro:ultrafast" {
+		t.Errorf("agy -ultrafast suffix: tried %s", got)
+	}
+	proOut = true
+	if got := send("agy", "/v1beta/models/codex/gpt-6-luna-ultrafast:generateContent", geminiBody); got != "acct-pro:ultrafast,acct-plus:priority" {
+		t.Errorf("agy -ultrafast suffix with pro out: tried %s", got)
+	}
+	proOut = false
 	// off: none of it is kept
 	if err := provider.SetFastPick("omp", "codex/gpt-6-luna", false); err != nil {
 		t.Fatal(err)

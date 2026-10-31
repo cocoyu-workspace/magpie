@@ -23,9 +23,12 @@ import (
 // Claude's speed "fast" reads as "fast". "" when it asks for none.
 func bodyTier(proto provider.Protocol, body []byte) string {
 	switch proto {
-	case provider.Anthropic:
-		if topValue(body, "speed").String() == "fast" {
-			return "fast"
+	case provider.Anthropic, provider.Gemini:
+		if s := topValue(body, "speed").String(); s == "fast" || s == "ultrafast" {
+			return s
+		}
+		if t := topValue(body, "serviceTier"); t.Type == gjson.String {
+			return tierWord(t.String())
 		}
 		fallthrough
 	case provider.Chat, provider.Responses:

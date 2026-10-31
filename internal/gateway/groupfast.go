@@ -27,7 +27,7 @@ func withFast(proto provider.Protocol, body []byte) []byte {
 			return body
 		}
 		return withFields(body, map[string]any{"service_tier": "priority"})
-	case provider.Anthropic:
+	case provider.Anthropic, provider.Gemini:
 		return withFields(body, map[string]any{"speed": "fast"})
 	}
 	return body

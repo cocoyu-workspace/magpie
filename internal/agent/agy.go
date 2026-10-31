@@ -25,11 +25,77 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/jsonc"
 
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/gateway"
 )
 
 const agyModels = "customModelsConfig.customModels"
+
+// agyStandIn is the model Antigravity CLI is set to use when routed through
+// magpie, for a hardcoded helper model it asks for by a bare name magpie
+// doesn't serve (such as gemini-3.1-flash-lite-preview for worktree/title
+// naming). Fast/ultrafast suffixes are stripped so background helper turns use
+// the standard tier.
+func trimAgyVariant(v string) (string, string) {
+	orig := v
+	for _, suf := range []string{"-max", "-xhigh", "-high", "-medium", "-low"} {
+		if base, cut := strings.CutSuffix(v, suf); cut {
+			v = base
+			break
+		}
+	}
+	for _, suf := range []string{"-ultrafast", "-fast"} {
+		if base, cut := strings.CutSuffix(v, suf); cut {
+			v = base
+			break
+		}
+	}
+	return v, strings.TrimPrefix(orig, v)
+}
+
+func agyStandIn(path string) string {
+	if p := jsonGet(path, "modelProvider")(); p != "gemini" {
+		return ""
+	}
+	v := jsonGet(path, "model")()
+	ref, ok := strings.CutPrefix(v, magpieID+"/")
+	if !ok {
+		return ""
+	}
+	base, _ := trimAgyVariant(ref)
+	return base
+}
+
+// agyModelEntry builds the .exa.codeium_common_pb.ModelInfo JSON entry for one
+// catalog model in customModelsConfig.customModels. When catalog metadata
+// (context window, output limit, capabilities) is known, it populates
+// maxTokens, maxOutputTokens, supportsContext, and modelFeatures so agy's
+// context tracker and CompactionConfig know the true window and features.
+func agyModelEntry(modelName string, m catalog.Model) map[string]any {
+	entry := map[string]any{
+		"apiProvider": "API_PROVIDER_GOOGLE_GEMINI",
+		"modelName":   modelName,
+	}
+	if m.Context == 0 && m.Output == 0 && !m.Reasoning && !m.Images {
+		return entry
+	}
+	if m.Context > 0 {
+		entry["maxTokens"] = m.Context
+	}
+	if out := maxTokens(m); out > 0 {
+		entry["maxOutputTokens"] = out
+	}
+	entry["supportsContext"] = true
+	entry["modelFeatures"] = map[string]any{
+		"supportsImages":            m.Images,
+		"supportsThinking":          m.Reasoning,
+		"supportsToolCalls":         true,
+		"supportsCumulativeContext": true,
+		"supportsContextTokens":     true,
+	}
+	return entry
+}
 
 // AgyLaunch is the command that starts agy on magpie's gateway and one of
 // its custom models, in the shell of this system. Its key names agy: its
@@ -76,7 +142,19 @@ func agy(home string) *Agent {
 		}
 		if with {
 			for _, m := range magpieModels("agy") {
-				ms[magpieID+"/"+m.ID] = map[string]string{"apiProvider": "API_PROVIDER_GOOGLE_GEMINI", "modelName": m.ID}
+				ms[magpieID+"/"+m.ID] = agyModelEntry(m.ID, m)
+				if m.Reasoning || len(m.Efforts) > 0 {
+					ms[magpieID+"/"+m.ID+"-high"] = agyModelEntry(m.ID+"-high", m)
+					ms[magpieID+"/"+m.ID+"-max"] = agyModelEntry(m.ID+"-max", m)
+				}
+				if m.CodexFast {
+					ms[magpieID+"/"+m.ID+"-fast"] = agyModelEntry(m.ID+"-fast", m)
+					ms[magpieID+"/"+m.ID+"-fast-high"] = agyModelEntry(m.ID+"-fast-high", m)
+					ms[magpieID+"/"+m.ID+"-fast-max"] = agyModelEntry(m.ID+"-fast-max", m)
+					ms[magpieID+"/"+m.ID+"-ultrafast"] = agyModelEntry(m.ID+"-ultrafast", m)
+					ms[magpieID+"/"+m.ID+"-ultrafast-high"] = agyModelEntry(m.ID+"-ultrafast-high", m)
+					ms[magpieID+"/"+m.ID+"-ultrafast-max"] = agyModelEntry(m.ID+"-ultrafast-max", m)
+				}
 			}
 		}
 		if len(ms) > 0 {
@@ -100,6 +178,10 @@ func agy(home string) *Agent {
 	return &Agent{
 		ID: "agy", Name: "Antigravity CLI", Icon: "antigravity-color", Aliases: []string{"antigravity-cli"}, Spelled: prefixed, NoNames: true,
 		Bin: "agy", Dir: dir, Path: path,
+		SplitSuffix: func(v string) (string, string, bool) {
+			base, suf := trimAgyVariant(v)
+			return base, suf, true
+		},
 		Launch: func() string {
 			if v := get(); usesMagpie(v) {
 				return AgyLaunch(v)
@@ -137,7 +219,8 @@ func agy(home string) *Agent {
 			Get: get,
 			Set: func(v string) error {
 				cur := get()
-				if ref, ok := strings.CutPrefix(v, magpieID+"/"); ok && isMagpie(ref) {
+				base, _ := trimAgyVariant(v)
+				if ref, ok := strings.CutPrefix(base, magpieID+"/"); ok && isMagpie(ref) {
 					if !usesMagpie(cur) {
 						stash(map[string]string{stashModel: cur, stashProvider: provider()})
 					}

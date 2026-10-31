@@ -63,6 +63,9 @@ func agentOf(r *http.Request) string {
 	if id, ok := strings.CutPrefix(callerKey(r), Token+"-"); ok && id != "" {
 		return usage.AgentOf(id)
 	}
+	if sharedWith(r) && strings.HasPrefix(r.URL.Path, "/v1beta/") && strings.HasPrefix(strings.ToLower(strings.TrimSpace(r.Header.Get("User-Agent"))), "google-genai-sdk/") {
+		return "agy"
+	}
 	if isClaudeDesktop(r) {
 		return "claude-desktop"
 	}
@@ -1842,6 +1845,39 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	}
 	// any Claude Code subagent's turn, moved or not, for the Routing page's tag
 	subagentID := subagentTurnOf(r, call.Kind, body, desktopPick != nil || subagentEffort != "")
+	var askedFast, askedUltra bool
+	if !catalogNames.get(struct{}{}, namesInCatalog)[asked] {
+		stripEffort := func() {
+			if askedEffort != "" {
+				return
+			}
+			for _, lvl := range []string{"max", "xhigh", "high", "medium", "low"} {
+				if base, cut := strings.CutSuffix(asked, "-"+lvl); cut {
+					checkBase := strings.TrimSuffix(strings.TrimSuffix(base, "-ultrafast"), "-fast")
+					if bp, bm, bok := provider.Resolve(checkBase); bok && (bp.Thinks(bm) || adaptiveOnly(bm)) {
+						asked, askedEffort = base, lvl
+						break
+					}
+				}
+			}
+		}
+		stripEffort()
+		for _, suf := range []struct {
+			suffix string
+			ultra  bool
+		}{
+			{"-ultrafast", true},
+			{"-fast", false},
+		} {
+			if base, cut := strings.CutSuffix(asked, suf.suffix); cut {
+				if bp, bm, bok := provider.Resolve(base); bok && provider.CanFast(bp, bm) {
+					asked, askedFast, askedUltra = base, true, suf.ultra
+					break
+				}
+			}
+		}
+		stripEffort()
+	}
 	p, model, ok := provider.Resolve(asked)
 	// a model the user disabled (#1867) — asked by its id, the model a
 	// sub-agent was put on, a group with every model in it disabled — is
@@ -2112,14 +2148,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// the fallbacks are left (codexFallBack)
 			cands, pl = fallbacksOnly(cands, pl, p.ID, model)
 		}
-		if provider.IsFastPick(agent, p.ID+"/"+model) {
+		if askedFast || provider.IsFastPick(agent, p.ID+"/"+model) {
 			// the agent's pick of it is sent in its vendor's fast mode
 			// (#954), as a group's member may be; its fallbacks, other
 			// models, go as they are
-			fastPick(cands, pl, p.ID, model, provider.IsUltraPick(agent, p.ID+"/"+model))
+			fastPick(cands, pl, p.ID, model, askedUltra || (!askedFast && provider.IsUltraPick(agent, p.ID+"/"+model)))
 		}
 	}
 	agentPick := provider.AgentEffort(agent)
+	if agentPick == "" && (agent == "agy" || from == provider.Gemini && callerKey(r) == "magpie-agy") {
+		agentPick = "medium"
+	}
 	if sealedTask {
 		cands, pl = s.sealedReaders(cands, pl, sealers)
 	}
@@ -2655,7 +2694,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				fixed = ""
 			}
 		}
-		if fixed == "" && ruled == "" && effort == "" && agentPick != "" && c.p.Thinks(c.model) {
+		if fixed == "" && ruled == "" && effort == "" && agentPick != "" && (c.p.Thinks(c.model) || adaptiveOnly(c.model)) {
 			// the effort picked in magpie for an agent whose config can't
 			// carry one (Cursor Private Inference, #1003), in place of the
 			// level it sent, on a model that reasons; a member fixed at
@@ -2670,7 +2709,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// a member fixed at an effort is asked for it, at the level its
 			// model has nearest, whatever the agent asked or the turn's
 			// pick: even a request that asked for no reasoning
-			attemptBody = withFixedEffort(from, attemptBody, fitLevel(fixed, c.p.Efforts(c.model)))
+			modelLevels := c.p.Efforts(c.model)
+			if adaptiveOnly(c.model) && (len(modelLevels) == 0 || fixed == "max") {
+				modelLevels = nil
+			}
+			attemptBody = withFixedEffort(from, attemptBody, fitLevel(fixed, modelLevels))
 		} else if effort != "" {
 			// the level this model has nearest to the one picked; one whose
 			// levels aren't known isn't asked for more than high, which
@@ -2743,7 +2786,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// instead, which every plan with Fast takes (yxinyu715 on X): asked
 		// by the client in either of OpenAI's APIs, or by a pick (#1954)
 		openAI := from == provider.Chat || from == provider.Responses
-		if (openAI && askedTier(attemptBody) == "ultrafast" || ultra && from == provider.Anthropic) && !takesTier(c, "ultrafast") {
+		if (openAI && askedTier(attemptBody) == "ultrafast" || ultra && (from == provider.Anthropic || from == provider.Gemini)) && !takesTier(c, "ultrafast") {
 			if j := tierMate(cands[i+1:], c, "ultrafast"); j >= 0 {
 				j += i + 1
 				cs := slices.Clone(cands)
@@ -2806,7 +2849,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			if ownFast {
 				ctx = withOwnFast(ctx)
 			}
-			if ultra && from == provider.Anthropic {
+			if ultra && (from == provider.Anthropic || from == provider.Gemini) {
 				ctx = withUltra(ctx)
 			}
 			hw.stop = stop
@@ -7050,6 +7093,9 @@ func bodyEffort(proto provider.Protocol, body []byte) string {
 		OutputConfig *struct {
 			Effort string `json:"effort"`
 		} `json:"output_config"`
+		GenerationConfig *struct {
+			ThinkingConfig *gThinking `json:"thinkingConfig"`
+		} `json:"generationConfig"`
 	}
 	if decodeJSON(body, &v) != nil {
 		return ""
@@ -7061,6 +7107,8 @@ func bodyEffort(proto provider.Protocol, body []byte) string {
 		return v.Reasoning.Effort
 	case proto == provider.Anthropic && v.OutputConfig != nil:
 		return v.OutputConfig.Effort
+	case proto == provider.Gemini && v.GenerationConfig != nil && v.GenerationConfig.ThinkingConfig != nil:
+		return v.GenerationConfig.ThinkingConfig.effort()
 	}
 	return ""
 }
@@ -7091,6 +7139,8 @@ func withBodyEffort(proto provider.Protocol, body []byte, effort string) []byte 
 		}
 		v.Reasoning["effort"] = effort
 		return withFields(body, map[string]any{"reasoning": v.Reasoning})
+	case provider.Gemini:
+		return withFixedEffort(proto, body, effort)
 	}
 	return body
 }

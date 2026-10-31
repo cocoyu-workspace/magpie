@@ -2572,12 +2572,15 @@ var claudeManaged = func() string {
 // model. For Codex, the model it is set to (codexStandIn). "" when the
 // agent isn't routed through magpie or is neither. For gateway.StandIn.
 func StandIn(agent, model string) string {
-	if agent != "claude" && agent != "codex" {
+	if agent != "claude" && agent != "codex" && agent != "agy" {
 		return ""
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
+	}
+	if agent == "agy" {
+		return agyStandIn(filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"))
 	}
 	if agent == "codex" {
 		return codexStandIn(filepath.Join(here(home).codexHome(), "config.toml"))
