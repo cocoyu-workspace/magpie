@@ -835,6 +835,11 @@ function documentText(p) {
   return `${title}[a ${p.source?.media_type ?? "document"} attachment]`
 }
 
+const SUPPORTS_ADDITIONAL_FIELDS_RE = /^claude-(?:opus|sonnet|haiku)-(?:4[.-][678]|5(?:[.-]5)?)\b/i
+const ALWAYS_ADAPTIVE_THINKING_RE = /^claude-(?:opus|sonnet)-5[.-]5\b/i
+const NO_XHIGH_EFFORT_RE = /^claude-(?:opus|sonnet)-4[.-]6\b/i
+const EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"])
+
 // thinking is whether the model is asked to think aloud, and for how
 // long: default on (50000 budget = max) for Claude / Auto unless explicitly disabled.
 function thinking(req, model) {
@@ -845,6 +850,26 @@ function thinking(req, model) {
   if (budget) return budget
   if (req.thinking?.budget_tokens > 0) return req.thinking.budget_tokens
   return 50000
+}
+
+function additionalFields(req, model, budget = thinking(req, model)) {
+  const id = String(model ?? "").toLowerCase()
+  if (!SUPPORTS_ADDITIONAL_FIELDS_RE.test(id)) return undefined
+  if (!budget) {
+    if (ALWAYS_ADAPTIVE_THINKING_RE.test(id)) {
+      return { thinking: { type: "adaptive" }, output_config: { effort: "low" } }
+    }
+    return { thinking: { type: "disabled" } }
+  }
+  const rawEffort = String(req?.output_config?.effort ?? "").toLowerCase()
+  let effort = EFFORT_LEVELS.has(rawEffort) ? rawEffort : ""
+  if (!effort && req?.thinking?.budget_tokens > 0) {
+    const b = req.thinking.budget_tokens
+    effort = b <= 10000 ? "low" : b <= 20000 ? "medium" : b <= 30000 ? "high" : "max"
+  }
+  if (!effort) return undefined
+  if (effort === "xhigh" && NO_XHIGH_EFFORT_RE.test(id)) effort = "max"
+  return { thinking: { type: "adaptive" }, output_config: { effort } }
 }
 
 // formatText is the structured output a request asks for, said in words:
@@ -1039,6 +1064,8 @@ function kiroRequest(req, model, profile, budget, sessionId = "") {
   const state = { chatTriggerType: "MANUAL", agentTaskType: "vibe", conversationId, currentMessage: { userInputMessage: current } }
   if (entries.length > 1) state.history = entries.slice(0, -1)
   const out = { conversationState: state, agentMode: "vibe" }
+  const extra = additionalFields(req, model, budget)
+  if (extra) out.additionalModelRequestFields = extra
   if (profile) out.profileArn = profile
   return out
 }
@@ -1374,8 +1401,8 @@ async function* events(body, model, budget, req = null) {
       } else if (kind === "reasoningContentEvent") {
         if (m.text) {
           said += m.text.length
-          yield { kind: "think", text: m.text }
-        } else if (m.signature) yield { kind: "sig", text: m.signature }
+          if (budget) yield { kind: "think", text: m.text }
+        } else if (m.signature && budget) yield { kind: "sig", text: m.signature }
       } else if (kind === "toolUseEvent") {
         if (m.toolUseId && m.toolUseId !== tool) {
           yield* think.end() // the text before a call is all said
@@ -1891,4 +1918,4 @@ export async function KiroAuthPlugin({ client } = {}) {
 }
 
 // for tests
-export const _internal = { generate, refresh, usageOf, buildKiro, kiroBody, IMAGE_LIMIT, events, reply, failure, toolID, toolName, toolNames, thinking, configModel, runtimeModel, readCLI, readIDE, regionOf, planName, frames, splitPromptTokens, staticPrefixCache }
+export const _internal = { generate, refresh, usageOf, buildKiro, kiroBody, IMAGE_LIMIT, events, reply, failure, toolID, toolName, toolNames, thinking, additionalFields, configModel, runtimeModel, readCLI, readIDE, regionOf, planName, frames, splitPromptTokens, staticPrefixCache }
