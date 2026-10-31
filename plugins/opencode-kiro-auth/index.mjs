@@ -822,15 +822,15 @@ function documentText(p) {
 }
 
 // thinking is whether the model is asked to think aloud, and for how
-// long: when the caller asked for it, of a Claude model (or Auto).
+// long: default on (30000 budget = high) for Claude / Auto unless explicitly disabled.
 function thinking(req, model) {
   const effort = req.output_config?.effort ?? ""
-  const on = req.thinking?.type === "enabled" || req.thinking?.type === "adaptive" || (effort && effort !== "low")
-  if (!on || !thinks(String(model).toLowerCase())) return 0
-  const budget = { low: 10000, high: 30000, xhigh: 50000, max: 50000 }[effort]
+  if (!thinks(String(model).toLowerCase())) return 0
+  if (req.thinking?.type === "disabled" || req.thinking?.budget_tokens === 0 || effort === "none") return 0
+  const budget = { low: 10000, medium: 20000, high: 30000, xhigh: 50000, max: 50000 }[effort]
   if (budget) return budget
-  if (!effort && req.thinking?.budget_tokens > 0) return req.thinking.budget_tokens
-  return 20000
+  if (req.thinking?.budget_tokens > 0) return req.thinking.budget_tokens
+  return 30000
 }
 
 // formatText is the structured output a request asks for, said in words:
