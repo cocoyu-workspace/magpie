@@ -241,7 +241,7 @@ func codexInstructions(model string) string {
 	if s, ok := codexCLIPrompts.get(catalog.CodexModelsCache(), model, codexPrompts); ok {
 		return s
 	}
-	return codexcat.Prompt
+	return codexcat.PromptForModel(model)
 }
 
 // codexBody makes a Responses request the one Codex CLI would send: it

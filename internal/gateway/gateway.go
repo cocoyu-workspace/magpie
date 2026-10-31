@@ -32,6 +32,7 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/awake"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/codexcat"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/gwbudget"
 	"github.com/yetone/magpie/internal/gwmw"
@@ -4148,9 +4149,26 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 	return res, err
 }
 
+// codexModelIdentity rewrites Codex's default "You are Codex, based on GPT-5."
+// identity sentence in outbound request bodies to match the actual model being
+// requested, so non-GPT-5 models do not claim to be GPT-5.
+func codexModelIdentity(p provider.Provider, body []byte) []byte {
+	if accountAgent(p) == "antigravity" || !bytes.Contains(body, []byte("You are Codex, based on GPT-5.")) {
+		return body
+	}
+	model := gjson.GetBytes(body, "model").String()
+	displayName := codexcat.CanonicalModelDisplayName(model)
+	if displayName == "" {
+		return body
+	}
+	target := "You are Codex, based on " + displayName + " (when asked what model you are, identify yourself as " + displayName + ")."
+	return bytes.ReplaceAll(body, []byte("You are Codex, based on GPT-5."), []byte(target))
+}
+
 // forwardOnce is one request to the provider, as forward makes it.
 func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provider.Protocol, path string, body []byte, in http.Header) (*http.Response, error) {
 	ctx = s.metered(p.Via(ctx), p, "")
+	body = codexModelIdentity(p, body)
 	body = deepseekToolPatterns(p, to, body)
 	body = grokToolPatterns(p, to, body)
 	body = deepseekTokenField(p, to, body)

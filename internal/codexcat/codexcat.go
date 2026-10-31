@@ -31,6 +31,106 @@ import (
 //go:embed codex_prompt.md
 var Prompt string
 
+// CanonicalModelDisplayName returns the human-readable model identity for
+// model slugs and optional display names (e.g. "gpt-6.1-sol-high" -> "GPT-6.1 Sol",
+// "cursor/grok-4.7@256k" ("Grok 4.7 @ 256k · Cursor") -> "Grok 4.7").
+func CanonicalModelDisplayName(rawSlug string, rawDisplayNames ...string) string {
+	trimmedSlug := strings.TrimSpace(rawSlug)
+	m := strings.ToLower(trimmedSlug)
+	if m == "" || m == "deepseek/deepseek-chat" || m == "group/auto-gemini-3-8-flash" {
+		return ""
+	}
+	if strings.HasPrefix(m, "group/auto") || strings.HasPrefix(m, "auto/") || m == "auto" {
+		return ""
+	}
+	if idx := strings.LastIndex(m, "/"); idx >= 0 {
+		m = m[idx+1:]
+	}
+	if idx := strings.Index(m, "#"); idx >= 0 {
+		m = m[:idx]
+	}
+	if idx := strings.Index(m, "@"); idx >= 0 {
+		m = m[:idx]
+	}
+	if m == "" || m == "auto" || strings.HasPrefix(m, "gpt-5") {
+		return ""
+	}
+	switch {
+	case strings.Contains(m, "6.1-sol") || strings.Contains(m, "5.6-sol"):
+		return "GPT-6.1 Sol"
+	case strings.Contains(m, "6.1-terra") || strings.Contains(m, "5.6-terra"):
+		return "GPT-6.1 Terra"
+	case strings.Contains(m, "6.1-luna") || strings.Contains(m, "5.6-luna"):
+		return "GPT-6.1 Luna"
+	case strings.Contains(m, "6-astra") || strings.Contains(m, "6.0-astra"):
+		return "GPT-6 Astra"
+	case strings.Contains(m, "opus-5-6") || strings.Contains(m, "opus-5.6"):
+		return "Claude Opus 5.6"
+	case strings.Contains(m, "opus-5-5") || strings.Contains(m, "opus-5.5"):
+		return "Claude Opus 5.5"
+	case strings.Contains(m, "opus-4-8") || strings.Contains(m, "opus-4.8"):
+		return "Claude Opus 4.8"
+	case strings.Contains(m, "opus-5"):
+		return "Claude Opus 5"
+	case strings.Contains(m, "sonnet-5-5") || strings.Contains(m, "sonnet-5.5"):
+		return "Claude Sonnet 5.5"
+	case strings.Contains(m, "sonnet-4-8") || strings.Contains(m, "sonnet-4.8"):
+		return "Claude Sonnet 4.8"
+	case strings.Contains(m, "sonnet-5"):
+		return "Claude Sonnet 5"
+	case strings.Contains(m, "haiku-4-8") || strings.Contains(m, "haiku-4.8"):
+		return "Claude Haiku 4.8"
+	case strings.Contains(m, "fable-5-1") || strings.Contains(m, "fable-5.1"):
+		return "Claude Fable 5.1"
+	case strings.HasPrefix(m, "gpt-6.1"):
+		return "GPT-6.1"
+	case strings.HasPrefix(m, "gpt-6"):
+		return "GPT-6"
+	}
+	for _, dn := range rawDisplayNames {
+		clean := strings.TrimSpace(dn)
+		if idx := strings.Index(clean, " · "); idx > 0 {
+			clean = strings.TrimSpace(clean[:idx])
+		} else if !strings.Contains(m, "claude") && !strings.Contains(m, "gemini") && !strings.Contains(m, "grok") && !strings.Contains(m, "glm") && !strings.Contains(m, "qwen") && !strings.Contains(m, "qmodel") && !strings.Contains(m, "kimi") && !strings.Contains(m, "minimax") && !strings.Contains(m, "deepseek-3") && !strings.Contains(m, "deepseek-v") {
+			continue
+		}
+		if idx := strings.Index(clean, " @ "); idx > 0 {
+			clean = strings.TrimSpace(clean[:idx])
+		} else if idx := strings.Index(clean, "@"); idx > 0 {
+			clean = strings.TrimSpace(clean[:idx])
+		}
+		lowerClean := strings.ToLower(clean)
+		if clean != "" && lowerClean != "auto" && !strings.HasPrefix(lowerClean, "gpt-5") {
+			return clean
+		}
+	}
+	if strings.Contains(m, "claude") || strings.Contains(m, "gemini") || strings.Contains(m, "grok") || strings.Contains(m, "glm") || strings.Contains(m, "qwen") || strings.Contains(m, "qmodel") || strings.Contains(m, "kimi") || strings.Contains(m, "minimax") || strings.Contains(m, "deepseek-3") || strings.Contains(m, "deepseek-v") {
+		cleanSlug := trimmedSlug
+		if idx := strings.LastIndex(cleanSlug, "/"); idx >= 0 {
+			cleanSlug = cleanSlug[idx+1:]
+		}
+		if idx := strings.Index(cleanSlug, "#"); idx >= 0 {
+			cleanSlug = cleanSlug[:idx]
+		}
+		if idx := strings.Index(cleanSlug, "@"); idx >= 0 {
+			cleanSlug = cleanSlug[:idx]
+		}
+		return strings.TrimSpace(cleanSlug)
+	}
+	return ""
+}
+
+// PromptForModel returns Prompt with the opening "You are Codex, based on GPT-5."
+// rewritten to match the target model's identity when known.
+func PromptForModel(slug string, displayNames ...string) string {
+	displayName := CanonicalModelDisplayName(slug, displayNames...)
+	if displayName == "" {
+		return Prompt
+	}
+	target := "You are Codex, based on " + displayName + " (when asked what model you are, identify yourself as " + displayName + ")."
+	return strings.Replace(Prompt, "You are Codex, based on GPT-5.", target, 1)
+}
+
 // DefaultEffort picks the middle of the road: "medium" or "high" when
 // offered, else whatever the list starts with.
 func DefaultEffort(e []string) string {
@@ -213,7 +313,7 @@ func entriesAt(ms []catalog.Model, after int, effort string) []any {
 		}
 		e := model{
 			Slug: m.ID, DisplayName: m.Name, Description: m.Name + " via magpie",
-			Instructions: Prompt, Efforts: []level{},
+			Instructions: PromptForModel(m.ID, m.Name), Efforts: []level{},
 			Shell: "unified_exec", Visibility: "list", InAPI: true, Priority: after + i + 1,
 			ApplyPatch: "freeform", Tools: []string{}, Modalities: []string{"text"},
 			Tiers: []tier{}, SearchTool: true, Parallel: true,
@@ -715,7 +815,7 @@ func ownEntry(raw map[string]any, id, name string, priority int) map[string]any 
 	delete(e, "upgrade")
 	e["slug"], e["display_name"], e["priority"], e["visibility"] = id, name, priority, "list"
 	if s, _ := e["base_instructions"].(string); s == "" {
-		e["base_instructions"] = Prompt
+		e["base_instructions"] = PromptForModel(id, name)
 	}
 	return e
 }
