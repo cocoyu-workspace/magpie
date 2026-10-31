@@ -200,3 +200,42 @@ func TestCodexCatalogSaysTextOnly(t *testing.T) {
 		t.Errorf("a model that sees, a group and a found one: %q, %q, %q", sees.Description, group.Description, found.Description)
 	}
 }
+
+func TestPromptForModelMatchesRequestedModelIdentity(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	var got struct {
+		Models []struct {
+			Slug         string `json:"slug"`
+			Instructions string `json:"base_instructions"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(Catalog([]catalog.Model{
+		{ID: "gpt-6.1-sol-high", Name: "gpt-6.1-sol-high"},
+		{ID: "gpt-6.1-terra-high", Name: "gpt-6.1-terra-high"},
+		{ID: "gpt-6-astra-high", Name: "gpt-6-astra-high"},
+		{ID: "claude-opus-5-5", Name: "claude-opus-5-5"},
+		{ID: "cursor/grok-4.7@256k", Name: "Grok 4.7 @ 256k · Cursor"},
+		{ID: "qoder/qmodel_38max", Name: "Qwen3.8-Max · Qoder"},
+		{ID: "kiro/claude-sonnet-5", Name: "claude-sonnet-5 · Kiro"},
+	}), &got); err != nil || len(got.Models) != 7 {
+		t.Fatalf("%v %v", err, got)
+	}
+	wants := []string{
+		"You are Codex, based on GPT-6.1 Sol (when asked what model you are, identify yourself as GPT-6.1 Sol).",
+		"You are Codex, based on GPT-6.1 Terra (when asked what model you are, identify yourself as GPT-6.1 Terra).",
+		"You are Codex, based on GPT-6 Astra (when asked what model you are, identify yourself as GPT-6 Astra).",
+		"You are Codex, based on Claude Opus 5.5 (when asked what model you are, identify yourself as Claude Opus 5.5).",
+		"You are Codex, based on Grok 4.7 (when asked what model you are, identify yourself as Grok 4.7).",
+		"You are Codex, based on Qwen3.8-Max (when asked what model you are, identify yourself as Qwen3.8-Max).",
+		"You are Codex, based on Claude Sonnet 5 (when asked what model you are, identify yourself as Claude Sonnet 5).",
+	}
+	for i, want := range wants {
+		if !strings.HasPrefix(got.Models[i].Instructions, want) || strings.Contains(got.Models[i].Instructions, "based on GPT-5.") {
+			t.Errorf("model %s instructions = %q, want prefix %q", got.Models[i].Slug, got.Models[i].Instructions, want)
+		}
+	}
+}
+
