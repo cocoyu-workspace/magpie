@@ -243,3 +243,46 @@ func TestThinkingStreamsWithNoOneElse(t *testing.T) {
 		}
 	}
 }
+
+func TestKiroThinkingStreamsThroughGroup(t *testing.T) {
+	if providerRefusesAfterThinking(provider.Provider{ID: "kiro"}, "claude-opus-5.5") {
+		t.Fatal("expected providerRefusesAfterThinking to be false for kiro")
+	}
+	if !providerRefusesAfterThinking(provider.Provider{ID: "claude"}, "claude-opus-5.5") {
+		t.Fatal("expected providerRefusesAfterThinking to remain true for claude")
+	}
+	up := &slowThinker{events: glmThinksSlowly, gap: 200 * time.Millisecond, done: make(chan time.Time, 1)}
+	pid := besideFake(t, "kiro", up)
+	scriptedOn(t, "b", provider.Anthropic, &scripted{replies: []reply{{200, "text/event-stream", anthropicAnswer}}})
+	refusalGroup(t, pid+"/fake-claude", "b/m")
+	gw := httptest.NewServer(New().Handler())
+	t.Cleanup(gw.Close)
+
+	res, err := http.Post(gw.URL+"/v1/messages", "application/json", strings.NewReader(claudeCodeAsk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var firstThought, firstText time.Time
+	rd := bufio.NewReader(res.Body)
+	for {
+		ln, err := rd.ReadString('\n')
+		if firstThought.IsZero() && strings.Contains(ln, `"thinking_delta"`) {
+			firstThought = time.Now()
+		}
+		if firstText.IsZero() && strings.Contains(ln, `"text_delta"`) {
+			firstText = time.Now()
+		}
+		if err != nil {
+			break
+		}
+	}
+	select {
+	case <-up.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the vendor never finished")
+	}
+	if firstThought.IsZero() || firstText.IsZero() || firstText.Sub(firstThought) < 300*time.Millisecond {
+		t.Fatalf("kiro thinking held: firstThought=%v firstText=%v diff=%v", firstThought, firstText, firstText.Sub(firstThought))
+	}
+}

@@ -188,3 +188,10 @@ func TestBillingLineKeptForClaude(t *testing.T) {
 		}
 	}
 }
+
+func TestBillingLineDroppedForKiro(t *testing.T) {
+	p := provider.Provider{ID: "kiro", Name: "Kiro"}
+	if !dropsBillingLine(p, provider.Anthropic, "claude-opus-5.5", "claude-opus-5.5") {
+		t.Fatal("expected dropsBillingLine to be true for kiro provider")
+	}
+}

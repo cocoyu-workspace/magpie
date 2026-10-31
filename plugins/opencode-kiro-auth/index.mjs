@@ -810,6 +810,20 @@ async function fitImages(out) {
   return out
 }
 
+const BILLING_LINE_RE = /^x-anthropic-billing-header:(?:\s*[A-Za-z_]+=[^;\s]*;)*\s*/
+const stripBillingText = (s) => (typeof s === "string" ? s.replace(BILLING_LINE_RE, "") : "")
+function systemTextOf(sys, sep = "\n\n") {
+  if (typeof sys === "string") return stripBillingText(sys)
+  if (!Array.isArray(sys)) return ""
+  const out = []
+  for (let i = 0; i < sys.length; i++) {
+    const p = sys[i]
+    if (p?.type !== "text" || typeof p.text !== "string") continue
+    const t = i === 0 ? stripBillingText(p.text) : p.text
+    if (t) out.push(t)
+  }
+  return out.join(sep)
+}
 const textOf = (c) =>
   typeof c === "string" ? c : Array.isArray(c) ? c.filter((p) => p?.type === "text").map((p) => p.text ?? "").join("\n\n") : ""
 const joinNonEmpty = (a, b) => (a && b ? a + "\n\n" + b : a + b)
@@ -965,7 +979,7 @@ function kiroRequest(req, model, profile, budget, sessionId = "") {
   })
   for (const e of entries) if (e.assistantResponseMessage && !e.assistantResponseMessage.toolUses.length) delete e.assistantResponseMessage.toolUses
   // the instructions go at the head of the first message
-  let system = typeof req.system === "string" ? req.system : textOf(req.system)
+  let system = systemTextOf(req.system)
   // Kiro has no field for the answer's format: it is told in words, at the
   // end of the instructions, as magpie's built-in tells it (inSystem)
   const format = formatText(req)
@@ -973,6 +987,10 @@ function kiroRequest(req, model, profile, budget, sessionId = "") {
   if (budget) system = `<thinking_mode>enabled</thinking_mode><max_thinking_length>${budget}</max_thinking_length>` + (system ? "\n" + system : "")
   if (system) entries[0].userInputMessage.content = system + "\n\n" + entries[0].userInputMessage.content
   if (Array.isArray(req.system)) mark(entries[0].userInputMessage, req.system)
+  if (req.cache_control) {
+    if (system) marked.add(entries[0].userInputMessage)
+    marked.add(entries.at(-1).userInputMessage)
+  }
 
   // the caller's tools, and any the conversation used that it no longer
   // offers — Kiro rejects a history naming a tool it wasn't given
@@ -1300,7 +1318,7 @@ function splitPromptTokens(req, totalInput) {
 }
 
 function computeStaticPrefixChars(req) {
-  const systemText = typeof req?.system === "string" ? req.system : Array.isArray(req?.system) ? req.system.map((s) => s?.text ?? "").join("") : ""
+  const systemText = systemTextOf(req?.system, "")
   const toolsText = Array.isArray(req?.tools) ? JSON.stringify(req.tools) : ""
   const prefixKey = createHash("sha256").update([req?.model ?? "", systemText, toolsText].join("\0")).digest("hex")
   return { staticChars: systemText.length + toolsText.length, prefixKey }
@@ -1556,6 +1574,8 @@ async function reply(it, model, stream, names = new Map()) {
   return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } })
 }
 
+const anthropicModelId = (m) => String(m ?? "").replace(/^(claude-(?:opus|sonnet|haiku)-\d+)\.(\d+)$/i, "$1-$2")
+
 // generate answers a Messages request through Kiro's API: once more,
 // refreshed, when Kiro turns the token down (403). As the built-in: no
 // credentials is a 401, a failed refresh after the 403 a 502; none marks
@@ -1595,7 +1615,7 @@ async function generate(creds, auth, req, signal, sessionId = "") {
     const f = failure(res.status, (await res.text()).slice(0, 1 << 20))
     return errorResponse(f.status, f.message)
   }
-  return kept(await reply(events(res.body, model, budget, req), model, req.stream === true, toolNames(req)))
+  return kept(await reply(events(res.body, model, budget, req), anthropicModelId(model), req.stream === true, toolNames(req)))
 }
 
 // ---- signing in ----------------------------------------------------------------------
