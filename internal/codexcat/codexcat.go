@@ -40,28 +40,32 @@ func CanonicalModelDisplayName(rawSlug string, rawDisplayNames ...string) string
 	if m == "" || m == "deepseek/deepseek-chat" || m == "group/auto-gemini-3-8-flash" {
 		return ""
 	}
-	if strings.HasPrefix(m, "group/auto") || strings.HasPrefix(m, "auto/") || m == "auto" {
-		return ""
-	}
 	if idx := strings.LastIndex(m, "/"); idx >= 0 {
 		m = m[idx+1:]
 	}
+	m = strings.TrimPrefix(m, "auto-")
 	if idx := strings.Index(m, "#"); idx >= 0 {
 		m = m[:idx]
 	}
 	if idx := strings.Index(m, "@"); idx >= 0 {
 		m = m[:idx]
 	}
-	if m == "" || m == "auto" || strings.HasPrefix(m, "gpt-5") {
+	if m == "" || m == "auto" {
 		return ""
 	}
 	switch {
-	case strings.Contains(m, "6.1-sol") || strings.Contains(m, "5.6-sol"):
+	case strings.Contains(m, "6.1-sol") || strings.Contains(m, "6-1-sol"):
 		return "GPT-6.1 Sol"
-	case strings.Contains(m, "6.1-terra") || strings.Contains(m, "5.6-terra"):
+	case strings.Contains(m, "5.6-sol") || strings.Contains(m, "5-6-sol"):
+		return "GPT-5.6 Sol"
+	case strings.Contains(m, "6.1-terra") || strings.Contains(m, "6-1-terra"):
 		return "GPT-6.1 Terra"
-	case strings.Contains(m, "6.1-luna") || strings.Contains(m, "5.6-luna"):
+	case strings.Contains(m, "5.6-terra") || strings.Contains(m, "5-6-terra"):
+		return "GPT-5.6 Terra"
+	case strings.Contains(m, "6.1-luna") || strings.Contains(m, "6-1-luna"):
 		return "GPT-6.1 Luna"
+	case strings.Contains(m, "5.6-luna") || strings.Contains(m, "5-6-luna"):
+		return "GPT-5.6 Luna"
 	case strings.Contains(m, "6-astra") || strings.Contains(m, "6.0-astra"):
 		return "GPT-6 Astra"
 	case strings.Contains(m, "opus-5-6") || strings.Contains(m, "opus-5.6"):
@@ -82,10 +86,13 @@ func CanonicalModelDisplayName(rawSlug string, rawDisplayNames ...string) string
 		return "Claude Haiku 4.8"
 	case strings.Contains(m, "fable-5-1") || strings.Contains(m, "fable-5.1"):
 		return "Claude Fable 5.1"
-	case strings.HasPrefix(m, "gpt-6.1"):
+	case strings.HasPrefix(m, "gpt-6.1") || strings.HasPrefix(m, "gpt-6-1"):
 		return "GPT-6.1"
 	case strings.HasPrefix(m, "gpt-6"):
 		return "GPT-6"
+	}
+	if strings.HasPrefix(m, "gpt-5") {
+		return ""
 	}
 	for _, dn := range rawDisplayNames {
 		clean := strings.TrimSpace(dn)
@@ -120,15 +127,23 @@ func CanonicalModelDisplayName(rawSlug string, rawDisplayNames ...string) string
 	return ""
 }
 
+// RewriteModelIdentity rewrites "You are Codex, based on GPT-5." or
+// "You are Codex, an agent based on GPT-5." in text to match the target model.
+func RewriteModelIdentity(text, slug string, displayNames ...string) string {
+	displayName := CanonicalModelDisplayName(slug, displayNames...)
+	if displayName == "" || text == "" {
+		return text
+	}
+	target := "You are Codex, based on " + displayName + " (when asked what model you are, identify yourself as " + displayName + ")."
+	out := strings.Replace(text, "You are Codex, based on GPT-5.", target, 1)
+	out = strings.Replace(out, "You are Codex, an agent based on GPT-5.", target, 1)
+	return out
+}
+
 // PromptForModel returns Prompt with the opening "You are Codex, based on GPT-5."
 // rewritten to match the target model's identity when known.
 func PromptForModel(slug string, displayNames ...string) string {
-	displayName := CanonicalModelDisplayName(slug, displayNames...)
-	if displayName == "" {
-		return Prompt
-	}
-	target := "You are Codex, based on " + displayName + " (when asked what model you are, identify yourself as " + displayName + ")."
-	return strings.Replace(Prompt, "You are Codex, based on GPT-5.", target, 1)
+	return RewriteModelIdentity(Prompt, slug, displayNames...)
 }
 
 // DefaultEffort picks the middle of the road: "medium" or "high" when
@@ -816,6 +831,8 @@ func ownEntry(raw map[string]any, id, name string, priority int) map[string]any 
 	e["slug"], e["display_name"], e["priority"], e["visibility"] = id, name, priority, "list"
 	if s, _ := e["base_instructions"].(string); s == "" {
 		e["base_instructions"] = PromptForModel(id, name)
+	} else {
+		e["base_instructions"] = RewriteModelIdentity(s, id, name)
 	}
 	return e
 }
