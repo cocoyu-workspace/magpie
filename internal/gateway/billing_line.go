@@ -34,7 +34,7 @@ func keepsBillingLine(to provider.Protocol, model, wire string) bool {
 // dropsBillingLine says whether p's request for model asked on to goes
 // without the billing line.
 func dropsBillingLine(p provider.Provider, to provider.Protocol, model, wire string) bool {
-	return !p.IsRemoteMagpie() && to != provider.CodeAssist && !keepsBillingLine(to, model, wire)
+	return !p.IsRemoteMagpie() && to != provider.CodeAssist && (!keepsBillingLine(to, model, wire) || p.ID == "kiro" || p.PluginProvider() == "kiro")
 }
 
 // withoutBillingLine is an Anthropic Messages body without Claude Code's

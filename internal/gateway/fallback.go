@@ -2091,6 +2091,17 @@ func refusesAfterThinking(model string) bool {
 	return strings.HasPrefix(m, "gemini")
 }
 
+// providerRefusesAfterThinking tells whether a candidate's reply may end with
+// a safety-filter refusal after reasoning. Kiro's CodeWhisperer stream never
+// sends stop_reason "refusal" (only "end_turn" or "tool_use"), so holding its
+// thinking across multiple Kiro accounts only buffers <thinking> for minutes.
+func providerRefusesAfterThinking(p provider.Provider, model string) bool {
+	if p.ID == "kiro" || p.PluginProvider() == "kiro" {
+		return false
+	}
+	return refusesAfterThinking(model)
+}
+
 // scan reads the held stream's events so far: an error before any content
 // fails it; content, or waiting too long for it, lets it through.
 func (h *holdWriter) scan() {

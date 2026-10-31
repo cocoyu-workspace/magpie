@@ -2572,7 +2572,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// holding it kept Codex on a Gemini model with nothing at all,
 		// not even response.created, for the whole of its thinking
 		// (LuckymanJC on Discord).
-		hw.thinkingShown = !refusesAfterThinking(c.model) || last
+		hw.thinkingShown = !providerRefusesAfterThinking(c.p, c.model) || last || !refusalAsksAgain(refusals+1)
 		hw.ctx, hw.alive, hw.streams = r.Context(), kept, streams
 		report := cacheReport
 		if c.p.Account == nil || c.p.Account.Agent != "claude" {
